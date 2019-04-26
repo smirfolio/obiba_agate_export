@@ -1,0 +1,278 @@
+<?php
+/**
+ * @file
+ * Obiba Agate Module.
+ *
+ * Copyright (c) 2015 OBiBa. All rights reserved.
+ * This program and the accompanying materials
+ * are made available under the terms of the GNU Public License v3.0.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+function obiba_agate_export_menu(){
+  $items = array();
+  $items['admin/config/obiba-agate/agate-export'] = array(
+    'title' => 'OBiBa Export Agate',
+    'description' => 'Export Drupal users to Agate server',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('obiba_agate_admin_pages_settings'),
+    'access arguments' => array('administer site configuration'),
+  );
+  $items['agate/export'] = array(
+    'title' => 'Export users process', //page title
+    'description' => 'Agate process credential export',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('obiba_agate_export_multi_users_confirm'),
+    'access arguments' => array('administer obiba mica'),
+  );
+  return $items;
+}
+
+/**
+ * Implements hook_user_operations().
+ */
+
+function obiba_agate_export_user_operations($form = array(), $form_state = array()) {
+  $operations =  array(
+    t('Agate operations') => array(
+      'label' => array('agate-exports_agate' => t('Export users to Agate')),
+    ),
+    '--' => array(
+      'label' => array()
+    ),
+  );
+
+    if (!empty($form_state['submitted'])) {
+    $operation_id = explode('-', $form_state['values']['operation']);
+    $operation = $operation_id[0];
+    if ($operation == 'agate') {
+      $operation_to_do = $operation_id[1];
+      if (user_access('administer obiba agate')) {
+        $operations[$form_state['values']['operation']] = array(
+          'callback' => 'obiba_agate_export_multi_users',
+          'callback arguments' => array($operation, $operation_to_do),
+        );
+      }
+      else {
+        watchdog('security', 'Detected malicious attempt to alter protected user fields.', array(), WATCHDOG_WARNING);
+        return;
+      }
+    }
+  }
+  return $operations;
+}
+
+/**
+ * Menu callback: confirm processing of batch group roles request.
+ */
+function obiba_agate_export_multi_users_confirm($form, &$form_state) {
+  $parameters = drupal_get_query_parameters();
+  $form['agate-login'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Agate login'),
+    '#description' => t('Please provide the agate administrator login'),
+    '#required' => FALSE,
+    '#size' => 40,
+    '#maxlength' => 40,
+    '#attributes' => array(
+      'placeholder' => t('administrator')
+    )
+  );
+    $form['agate-password'] = array(
+    '#type' => 'password',
+    '#title' => t('Agate password'),
+    '#description' => t('Please provide the agate administrator password'),
+    '#required' => FALSE,
+    '#size' => 40,
+    '#maxlength' => 40,
+    '#attributes' => array(
+      'placeholder' => t('Administrator password')
+    ),
+  );
+  $form['accounts'] = array(
+    '#type' => 'hidden',
+    '#value' => $parameters['accounts']
+  );
+  $form['#submit'][] = 'obiba_agate_export_submit';
+  $form['submit_button'] = array(
+    '#type' => 'submit',
+    '#value' => t('Submit!'),
+);
+  return $form;
+}
+
+function obiba_agate_export_multi_users($accounts, $operation, $operation_to_do){
+  drupal_goto('agate/export', array('query' => array(
+    'accounts' => implode(',', $accounts),
+  )));
+}
+
+function obiba_agate_export_submit($form, &$form_state){
+  $accounts = explode(',', $form_state['values']['accounts']);
+  $batch_operations = array();
+  $accounts = user_load_multiple($accounts);
+  $mapped_field_export_config = variable_get('obiba_agate_user_fields_mapping');
+  $credentials = array(
+    'agate-login' => $form_state['values']['agate-login'],
+    'agate-password' => base64_encode($form_state['values']['agate-password']),
+  );
+  foreach ($accounts as $account) {
+    // Exclude users with administrator role users to be export have to not be Drupal administrator
+    if(!in_array(variable_get('user_admin_role'), array_keys($account->roles))){
+      $batch_operations[] = array('obiba_agate_export_user', array($account, $mapped_field_export_config, $credentials));
+    }
+  }
+
+  // Prepare batch steps.
+  batch_set(array(
+    'operations' => $batch_operations,
+    'finished' => 'obiba_agate_export_batch_finished',
+    'title' => t('Processing Export users to agate'),
+    'init_message' => t('Export operation is starting.'),
+    'progress_message' => t('Processed @current out of @total.'),
+    'error_message' => t('The export operation has encountered an error.'),
+  ));
+  $redirect = 'admin/people';
+
+  batch_process($redirect);
+
+}
+
+function obiba_agate_export_user($account, $mapped_field_export_config, $credentials, &$context){
+  // drupal_set_message(t('The user @account was exported', array('@account' => $account->name)), 'success');
+  $context['message'] = t('Exporting the user @account', array('@account' => $account->name));
+  $groups = array_values(array_filter($account->roles, function($role){
+      if (!empty($role) && strstr($role, 'mica')) {
+        return $role;
+      }
+    }
+  ));
+
+  $tmp_password = user_password();
+  $account_to_update = array(
+    'password' => $tmp_password,
+    'confirmPassword' => $tmp_password,
+    'user' => array(
+      'email' => $account->mail,
+      'name' => $account->name,
+      'firstName' => $account->{$mapped_field_export_config['firstName']['drupal_value']}['und'][0]['safe_value'],
+      'lastName' => $account->{$mapped_field_export_config['lastName']['drupal_value']}['und'][0]['safe_value'],
+      'role' => 'agate-user',
+      'groups' => $groups,
+      'preferredLanguage' => $account->language,
+      'status' => variable_get_value('agate_export_default_status'),
+      'realm' => 'agate-user-realm',
+      'applications' => array(
+        'mica',
+        'drupal',
+      )
+    )
+  );
+
+  foreach ($mapped_field_export_config as $agate_field => $field_config){
+    if($agate_field !== 'firstName' && $agate_field !== 'lastName'&& $field_config['enable'] === 1){
+      $account_to_update['user']['attributes'][] = array(
+        'name' => $agate_field,
+        'value' => isset($account->{$field_config['drupal_value']}['und'][0]['safe_value']) ? $account->{$field_config['drupal_value']}['und'][0]['safe_value'] : '',
+      );
+    }
+  }
+
+  $agate = new ObibaExport(variable_get_value('agate_url'), $credentials['agate-login'], base64_decode($credentials['agate-password']));
+  $response = $agate->exportAgateUser($account_to_update);
+  $reset_password_reponse = $agate->resetPassword($account->name);
+  if(isset($response['codeError']) || isset($reset_password_reponse['codeError'])){
+    if(isset($response['codeError'])){
+      $context['results']['failed_account'][] = array(
+        'account' => $account->name,
+        'message' => $response['message']);
+    }
+    if(isset($reset_password_reponse['codeError'])){
+      $context['results']['failed_account'][] = array(
+        'account' => $account->name,
+        'message' => $reset_password_reponse['message']);
+    }
+  }
+  else{
+    $context['results']['exported'][] = $account->name;
+    user_set_authmaps($account, array("authname_" . "obiba_agate" => $account->name));
+  }
+}
+
+function obiba_agate_export_batch_finished($success, $results, $operations){
+  if(isset($results['failed_account'])){
+    foreach ($results['failed_account'] as $failed_account){
+      drupal_set_message(t('The user failed to be exported to agate with message @message',
+        array('@message' => $failed_account['message'])), 'warning');
+    }
+  }
+
+  if(isset($results['exported'])){
+    drupal_set_message(t('The users @account was exported to agate', array('@account' =>implode(',', $results['exported']))), 'success');
+  }
+  return t('The export is finished');
+}
+
+
+/**
+ *  Update drupal user profile
+ */
+function obiba_agate_export_normalize_drupal_user_profile($updated_profile, $account){
+  $get_value = function($updated_profile, $key_field){
+    return !empty($updated_profile->{$key_field}) ? $updated_profile->{$key_field} : '';
+  };
+  if(!empty(variable_get('obiba_agate_user_fields_mapping'))){
+    foreach (variable_get('obiba_agate_user_fields_mapping') as $key_field => $field){
+      if($key_field !== 'email' || $key_field !== 'username'){
+        if($key_field === 'firstName'){
+          $account->{$field['drupal_value']}['und'][0]['value'] = $get_value($updated_profile, 'firstname');
+        }
+        if($key_field === 'lastName'){
+          $account->{$field['drupal_value']}['und'][0]['value'] = $get_value($updated_profile, 'lastname');
+        }
+        $account->{$field['drupal_value']}['und'][0]['value'] = $get_value($updated_profile, $key_field);
+      }
+    }
+  }
+  return $account;
+}
+
+/**
+ * Implements hook_variable_info().
+ */
+function obiba_agate_export_variable_info($options) {
+  $variable['agate_export_default_status'] = array(
+    'title' => t('The Default exported users status in agate'),
+    'description' => t('The default exported users status in agate (ACTIVE, INACTIVE, PENDING)'),
+    'type' => 'string',
+    'default' => 'ACTIVE',
+  );
+  return $variable;
+}
+
+/**
+ * Provides settings pages.
+ */
+function obiba_agate_admin_pages_settings() {
+  // Login page.
+  $form['agate_export'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Agate export Drupal users'),
+    '#collapsible' => FALSE,
+  );
+  $info = variable_get_info('agate_export_default_status');
+  $form['agate_export']['agate_export_default_status'] = array(
+    '#type' => 'select',
+    '#title' => $info['title'],
+    '#default_value' => variable_get_value('agate_export_default_status'),
+    '#description' => $info['description'],
+    '#options' => array(
+      'ACTIVE' => 'Active',
+      'INACTIVE' => 'Inactive',
+      'PENDING' => 'Pending',
+      'APPROVED' => 'Approved',
+    ),
+  );
+  return system_settings_form($form);
+}

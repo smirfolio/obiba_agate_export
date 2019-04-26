@@ -1,0 +1,8 @@
+name = Obiba Agate Export
+description = Export Drupal users to Agate server
+package = Obiba
+core = 7.x
+
+dependencies[] = obiba_agate
+
+files[] = includes/obiba_agate_exports.inc
