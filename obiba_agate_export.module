@@ -181,20 +181,24 @@ function obiba_agate_export_user($account, $mapped_field_export_config, $credent
 
   $agate = new ObibaExport(variable_get_value('agate_url'), $credentials['agate-login'], base64_decode($credentials['agate-password']));
   $response = $agate->exportAgateUser($account_to_update);
-  $reset_password_reponse = $agate->resetPassword($account->name);
-  if(isset($response['codeError']) || isset($reset_password_reponse['codeError'])){
+  $noError = TRUE;
     if(isset($response['codeError'])){
       $context['results']['failed_account'][] = array(
         'account' => $account->name,
         'message' => $response['message']);
+      $noError = FALSE;
     }
-    if(isset($reset_password_reponse['codeError'])){
-      $context['results']['failed_account'][] = array(
-        'account' => $account->name,
-        'message' => $reset_password_reponse['message']);
+    else{
+      $reset_password_reponse = $agate->resetPassword($account->name);
+      if(isset($reset_password_reponse['codeError'])){
+        $context['results']['failed_account'][] = array(
+          'account' => $account->name,
+          'message' => $reset_password_reponse['message']);
+        $noError = FALSE;
+      }
     }
-  }
-  else{
+
+  if($noError){
     $context['results']['exported'][] = $account->name;
     user_set_authmaps($account, array("authname_" . "obiba_agate" => $account->name));
   }
