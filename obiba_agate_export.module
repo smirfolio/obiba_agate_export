@@ -198,7 +198,7 @@ function obiba_agate_export_user($account, $mapped_field_export_config, $credent
       }
     }
 
-  if($noError){
+  if(!$noError){
     $context['results']['exported'][] = $account->name;
     user_set_authmaps($account, array("authname_" . "obiba_agate" => $account->name));
   }
