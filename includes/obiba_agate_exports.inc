@@ -47,7 +47,7 @@ class ObibaExport extends ObibaAgateClient{
   public function resetPassword($user_name){
     $this->lastResponse = NULL;
     $url = $this->agateUrl . '/user/' . $user_name . '/reset_password';
-    $data = json_encode(array('id' => $user_name));
+    $data = json_encode(array('id' => strtolower($user_name)));
 
     $request = new HttpClientRequest($url, array(
       'method' => HttpClientRequest::METHOD_PUT,
@@ -73,7 +73,6 @@ class ObibaExport extends ObibaAgateClient{
       return json_decode($this->lastResponse);
     }
     catch (HttpClientException $e) {
-      $error_message = json_decode($e->getResponse()->body);
       watchdog('Agate Client', 'Request failed, @code: @message',
         array(
           '@code' => $e->getCode(),
@@ -82,7 +81,7 @@ class ObibaExport extends ObibaAgateClient{
       drupal_add_http_header('Status', $e->getCode());
       return array(
         'codeError' => $e->getCode(),
-        'message' => $error_message->message,
+        'message' => $e->getCode(),
       );
     }
   }
